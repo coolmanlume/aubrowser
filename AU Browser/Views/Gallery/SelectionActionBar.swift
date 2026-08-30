@@ -4,7 +4,11 @@ import AUBrowserCore
 import SwiftUI
 
 /// Bottom bar that appears when one or more plugin cards are selected.
-/// Provides batch Like All, Rescan All, and Deselect actions.
+/// Provides batch Like All, Rescan Selected, and Deselect actions.
+///
+/// Rescanning the *entire* library is deliberately menu-only
+/// (Plugins → Rescan All Plugins…, see `AUBrowserCommands`) — this bar only
+/// ever acts on the current selection.
 struct SelectionActionBar: View {
 
     @Binding var selectedIds: Set<String>
@@ -29,7 +33,7 @@ struct SelectionActionBar: View {
             Button {
                 scanManager.rescan(store.plugins(inGroups: selectedIds))
             } label: {
-                Label("Rescan All", systemImage: "arrow.clockwise")
+                Label("Rescan Selected", systemImage: "arrow.clockwise")
             }
 
             Button {
