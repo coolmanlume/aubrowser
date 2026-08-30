@@ -48,6 +48,15 @@ public final class ScanQueueManager: ObservableObject {
     /// Used by the UI to progressively reveal cards as they complete.
     @Published public private(set) var processedIds: Set<String> = []
 
+    /// True only during a library-wide scan (`startIncrementalScan`, `startFullRescan`,
+    /// `resumeScan`) — tells the gallery it's safe to progressively reveal cards as they
+    /// complete rather than flooding the grid with hundreds of not-yet-captured cards.
+    ///
+    /// A targeted `rescan(...)` of one plugin or a small selection also sets `isScanning`,
+    /// but must never trigger that same hide-everything-uncaptured behaviour — the rest
+    /// of the library isn't part of that scan and should stay exactly as visible as it was.
+    @Published public private(set) var isBulkScan = false
+
     /// True when a previous scan was started but is not currently running,
     /// meaning `resumeScan()` can pick up where it left off.
     public var canResume: Bool { !isScanning && !lastInstalledPlugins.isEmpty }
@@ -91,21 +100,21 @@ public final class ScanQueueManager: ObservableObject {
     public func startIncrementalScan(installedPlugins: [Plugin]) {
         guard !isScanning else { return }
         lastInstalledPlugins = installedPlugins
-        launch(plugins: installedPlugins, forceAll: false, groupPrimariesOnly: true)
+        launch(plugins: installedPlugins, forceAll: false, groupPrimariesOnly: true, isBulkScan: true)
     }
 
     /// Re-captures every installed plugin's representative variant, ignoring existing thumbnails.
     public func startFullRescan(installedPlugins: [Plugin]) {
         cancel()
         lastInstalledPlugins = installedPlugins
-        launch(plugins: installedPlugins, forceAll: true, groupPrimariesOnly: true)
+        launch(plugins: installedPlugins, forceAll: true, groupPrimariesOnly: true, isBulkScan: true)
     }
 
     /// Resumes an incremental scan using the last known plugin list.
     /// Does nothing if no previous scan was started or one is already running.
     public func resumeScan() {
         guard canResume else { return }
-        launch(plugins: lastInstalledPlugins, forceAll: false, groupPrimariesOnly: true)
+        launch(plugins: lastInstalledPlugins, forceAll: false, groupPrimariesOnly: true, isBulkScan: true)
     }
 
     /// Re-captures a single plugin by ID, cancelling any ongoing scan first.
@@ -132,6 +141,7 @@ public final class ScanQueueManager: ObservableObject {
         scanTask?.cancel()
         scanTask = nil
         isScanning = false
+        isBulkScan = false
         progress = .init()
     }
 
@@ -141,9 +151,11 @@ public final class ScanQueueManager: ObservableObject {
         plugins: [Plugin],
         forceAll: Bool,
         markRemoved: Bool = true,
-        groupPrimariesOnly: Bool = false
+        groupPrimariesOnly: Bool = false,
+        isBulkScan: Bool = false
     ) {
         isScanning = true
+        self.isBulkScan = isBulkScan
         progress = .init()
         processedIds = []
 
@@ -152,6 +164,7 @@ public final class ScanQueueManager: ObservableObject {
             await runScan(plugins: plugins, forceAll: forceAll, markRemoved: markRemoved,
                           groupPrimariesOnly: groupPrimariesOnly)
             isScanning = false
+            self.isBulkScan = false
             progress = .init()
         }
     }

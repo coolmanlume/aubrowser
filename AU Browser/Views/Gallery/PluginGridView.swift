@@ -19,10 +19,13 @@ struct PluginGridView: View {
 
     private let columns = [GridItem(.adaptive(minimum: 220, maximum: 220), spacing: 14)]
 
-    /// Groups visible right now. During scanning: only groups with at least one
-    /// processed or in-progress variant. At rest: everything.
+    /// Groups visible right now. During a library-wide (bulk) scan: only groups with
+    /// at least one processed or in-progress variant, so the grid fills in
+    /// progressively instead of flashing hundreds of not-yet-captured cards. A
+    /// targeted rescan of one plugin or a selection never hides the rest of the
+    /// library — only `isBulkScan` gates this, not `isScanning` alone.
     private var visibleGroups: [PluginGroup] {
-        guard scanManager.isScanning else { return store.groupedRows }
+        guard scanManager.isScanning, scanManager.isBulkScan else { return store.groupedRows }
         return store.groupedRows.filter { group in
             group.variants.contains {
                 $0.row.thumbnail != nil                              ||
