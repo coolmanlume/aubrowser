@@ -9,7 +9,7 @@ struct ContentView: View {
     @EnvironmentObject private var scanManager: ScanQueueManager
 
     @State private var viewMode: ViewMode = .grid
-    @State private var detailRow: PluginRow?
+    @State private var detailGroup: PluginGroup?
     @State private var selectedIds: Set<String> = []
 
     // Tracks whether we've kicked off the first scan this session
@@ -23,13 +23,13 @@ struct ContentView: View {
             PluginGalleryView(
                 viewMode: viewMode,
                 selectedIds: $selectedIds,
-                onPluginSelected: { id in detailRow = store.row(for: id) }
+                onPluginSelected: { id in detailGroup = store.group(for: id) }
             )
             .navigationTitle("AU Browser")
             .toolbar { toolbarContent }
         }
-        .sheet(item: $detailRow) { row in
-            PluginDetailPopover(row: row)
+        .sheet(item: $detailGroup) { group in
+            PluginDetailPopover(group: group)
                 .environmentObject(store)
                 .environmentObject(scanManager)
         }

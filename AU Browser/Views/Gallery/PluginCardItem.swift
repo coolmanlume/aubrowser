@@ -10,7 +10,7 @@ import SwiftUI
 /// and a hover overlay with quick-action buttons.
 struct PluginCardItem: View {
 
-    let row: PluginRow
+    let group: PluginGroup
     var isSelected: Bool = false
     var onSelect: () -> Void = {}
     var onToggleSelection: () -> Void = {}
@@ -21,8 +21,11 @@ struct PluginCardItem: View {
     @State private var image: NSImage?
     @State private var isHovered = false
 
+    private var row: PluginRow     { group.primary }
     private var isFavorite: Bool   { row.userData?.isFavorite ?? false }
-    private var isCapturing: Bool  { scanManager.progress.inProgress.contains(row.id) }
+    private var isCapturing: Bool  {
+        group.variants.contains { scanManager.progress.inProgress.contains($0.id) }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -116,12 +119,12 @@ struct PluginCardItem: View {
             }
 
             overlayButton(icon: "arrow.clockwise", tint: .white) {
-                scanManager.rescan(row.plugin)
+                scanManager.rescan(group.plugins)
             }
 
             overlayButton(icon: "doc.on.doc", tint: .white) {
                 NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(row.plugin.name, forType: .string)
+                NSPasteboard.general.setString(group.displayName, forType: .string)
             }
         }
         .padding(.bottom, 8)
@@ -151,13 +154,19 @@ struct PluginCardItem: View {
 
     private var labelArea: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(row.plugin.name)
+            Text(group.displayName)
                 .font(.callout.weight(.medium))
                 .lineLimit(1)
-            Text(row.plugin.manufacturer)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+            HStack(spacing: 4) {
+                Text(row.plugin.manufacturer)
+                    .lineLimit(1)
+                if group.hasMultipleVariants {
+                    Text("· \(group.variants.count) versions")
+                        .lineLimit(1)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
@@ -168,13 +177,13 @@ struct PluginCardItem: View {
         Button(isFavorite ? "Remove from Favorites" : "Add to Favorites") {
             Task { await store.toggleFavorite(pluginId: row.id) }
         }
-        Button("Rescan") {
-            scanManager.rescan(row.plugin)
+        Button(group.hasMultipleVariants ? "Rescan All Versions" : "Rescan") {
+            scanManager.rescan(group.plugins)
         }
         Divider()
         Button("Copy Name") {
             NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(row.plugin.name, forType: .string)
+            NSPasteboard.general.setString(group.displayName, forType: .string)
         }
         Button("Copy Bundle Path") {
             NSPasteboard.general.clearContents()

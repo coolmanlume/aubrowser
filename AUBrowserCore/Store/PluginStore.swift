@@ -36,6 +36,11 @@ public final class PluginStore: ObservableObject {
     /// Filtered and sorted rows ready for the gallery / list view.
     @Published public private(set) var rows: [PluginRow] = []
 
+    /// `rows` folded into one entry per underlying plugin — mono/stereo/up-mix
+    /// (and, where a studio sibling exists, "Live") component variants collapse
+    /// into a single `PluginGroup`, in the same order as `rows`.
+    @Published public private(set) var groupedRows: [PluginGroup] = []
+
     /// Unique manufacturer names present in the DB (drives the sidebar).
     @Published public private(set) var manufacturers: [String] = []
 
@@ -228,6 +233,7 @@ public final class PluginStore: ObservableObject {
         }
 
         rows = result
+        groupedRows = PluginGrouping.group(result)
     }
 
     // MARK: - User data writes
@@ -282,6 +288,26 @@ public final class PluginStore: ObservableObject {
     /// useful for populating detail popovers without requiring the plugin to be visible.
     public func row(for pluginId: String) -> PluginRow? {
         snapshot.first { $0.id == pluginId }
+    }
+
+    /// Returns the current `PluginGroup` whose id (or one of whose variants) matches
+    /// `pluginId`, searching the filtered/sorted `groupedRows` first and falling back
+    /// to a fresh grouping of the full snapshot so detail panels stay reachable even
+    /// when the underlying card has scrolled out of the active filter.
+    public func group(for pluginId: String) -> PluginGroup? {
+        if let match = groupedRows.first(where: { $0.id == pluginId || $0.variants.contains { $0.id == pluginId } }) {
+            return match
+        }
+        let allGroups = PluginGrouping.group(snapshot)
+        return allGroups.first { $0.id == pluginId || $0.variants.contains { $0.id == pluginId } }
+    }
+
+    /// Expands a set of group ids into every underlying `Plugin` across all their
+    /// variants — used to fan batch actions (e.g. rescan) out to every component.
+    public func plugins(inGroups groupIds: Set<String>) -> [Plugin] {
+        groupedRows
+            .filter { groupIds.contains($0.id) }
+            .flatMap(\.plugins)
     }
 
     /// Returns all scan records for a plugin, newest first.

@@ -83,24 +83,29 @@ public final class ScanQueueManager: ObservableObject {
 
     /// Upserts all installed plugins then scans only those without an up-to-date thumbnail.
     /// Safe to call on every launch — exits immediately if nothing needs capturing.
+    ///
+    /// Only captures one representative component per group of mono/stereo/Live
+    /// variants (see `PluginGrouping`) — the others aren't shown on their own card,
+    /// so capturing them would just be extra out-of-process AU instantiations for
+    /// nothing the UI displays.
     public func startIncrementalScan(installedPlugins: [Plugin]) {
         guard !isScanning else { return }
         lastInstalledPlugins = installedPlugins
-        launch(plugins: installedPlugins, forceAll: false)
+        launch(plugins: installedPlugins, forceAll: false, groupPrimariesOnly: true)
     }
 
-    /// Re-captures every installed plugin, ignoring existing thumbnails.
+    /// Re-captures every installed plugin's representative variant, ignoring existing thumbnails.
     public func startFullRescan(installedPlugins: [Plugin]) {
         cancel()
         lastInstalledPlugins = installedPlugins
-        launch(plugins: installedPlugins, forceAll: true)
+        launch(plugins: installedPlugins, forceAll: true, groupPrimariesOnly: true)
     }
 
     /// Resumes an incremental scan using the last known plugin list.
     /// Does nothing if no previous scan was started or one is already running.
     public func resumeScan() {
         guard canResume else { return }
-        launch(plugins: lastInstalledPlugins, forceAll: false)
+        launch(plugins: lastInstalledPlugins, forceAll: false, groupPrimariesOnly: true)
     }
 
     /// Re-captures a single plugin by ID, cancelling any ongoing scan first.
@@ -132,14 +137,20 @@ public final class ScanQueueManager: ObservableObject {
 
     // MARK: - Private: task lifecycle
 
-    private func launch(plugins: [Plugin], forceAll: Bool, markRemoved: Bool = true) {
+    private func launch(
+        plugins: [Plugin],
+        forceAll: Bool,
+        markRemoved: Bool = true,
+        groupPrimariesOnly: Bool = false
+    ) {
         isScanning = true
         progress = .init()
         processedIds = []
 
         scanTask = Task { [weak self] in
             guard let self else { return }
-            await runScan(plugins: plugins, forceAll: forceAll, markRemoved: markRemoved)
+            await runScan(plugins: plugins, forceAll: forceAll, markRemoved: markRemoved,
+                          groupPrimariesOnly: groupPrimariesOnly)
             isScanning = false
             progress = .init()
         }
@@ -147,7 +158,12 @@ public final class ScanQueueManager: ObservableObject {
 
     // MARK: - Private: main pipeline
 
-    private func runScan(plugins: [Plugin], forceAll: Bool, markRemoved: Bool = true) async {
+    private func runScan(
+        plugins: [Plugin],
+        forceAll: Bool,
+        markRemoved: Bool = true,
+        groupPrimariesOnly: Bool = false
+    ) async {
         guard !Task.isCancelled else { return }
 
         // 1. Upsert every installed plugin row, preserving installDate
@@ -161,7 +177,7 @@ public final class ScanQueueManager: ObservableObject {
         }
 
         // 3. Compute which plugins need a capture
-        let queue = forceAll ? plugins : await computeScanQueue(from: plugins)
+        let queue = await computeQueue(from: plugins, forceAll: forceAll, groupPrimariesOnly: groupPrimariesOnly)
 
         guard !queue.isEmpty, !Task.isCancelled else { return }
 
@@ -172,18 +188,31 @@ public final class ScanQueueManager: ObservableObject {
             PluginEnumerator.buildComponentIndex()
         }.value
 
-        // 5. Process concurrently, capped by semaphore
+        // 5. Process concurrently, capped by a global semaphore plus a per-bundle
+        //    semaphore — several distinct plugins (e.g. Waves' whole catalogue) can
+        //    share one shell binary, and instantiating that shell out-of-process
+        //    from more than one component at a time is what trips its internal
+        //    "archiver"/"too many parameters" dialogs. One in flight per bundle
+        //    keeps every shared shell serialized without limiting unrelated plugins.
         let semaphore = AsyncSemaphore(value: maxConcurrent)
+        var bundleLocks: [String: AsyncSemaphore] = [:]
+        for plugin in queue where bundleLocks[plugin.bundlePath] == nil {
+            bundleLocks[plugin.bundlePath] = AsyncSemaphore(value: 1)
+        }
 
         await withTaskGroup(of: Void.self) { group in
             for plugin in queue {
                 guard !Task.isCancelled else { break }
+                let bundleLock = bundleLocks[plugin.bundlePath]
 
                 group.addTask { @MainActor [weak self] in
                     guard let self else { return }
 
                     await semaphore.wait()
                     defer { Task { await semaphore.signal() } }
+
+                    await bundleLock?.wait()
+                    defer { if let bundleLock { Task { await bundleLock.signal() } } }
 
                     guard !Task.isCancelled else { return }
 
@@ -227,22 +256,39 @@ public final class ScanQueueManager: ObservableObject {
         } catch {}
     }
 
-    private func computeScanQueue(from plugins: [Plugin]) async -> [Plugin] {
+    /// Determines which plugins actually need a `CaptureHelper` spawn.
+    ///
+    /// When `groupPrimariesOnly` is set, `plugins` is first folded through the same
+    /// `PluginGrouping` used by the UI, and only each group's representative variant
+    /// is considered — the rest never get a card of their own, so there's no reason
+    /// to pay for their capture.
+    private func computeQueue(
+        from plugins: [Plugin],
+        forceAll: Bool,
+        groupPrimariesOnly: Bool
+    ) async -> [Plugin] {
+        let thumbIndex: [String: Thumbnail]
         do {
-            let thumbs = try await db.dbPool.read { db in
-                try Thumbnail.fetchAll(db)
-            }
-            let thumbIndex = Dictionary(
-                thumbs.map { ($0.pluginId, $0) },
-                uniquingKeysWith: { a, _ in a }
-            )
-            return plugins.filter { plugin in
-                guard let thumb = thumbIndex[plugin.id] else { return true }
-                return thumb.captureVersion < DatabaseSetup.currentCaptureVersion
-            }
+            let thumbs = try await db.dbPool.read { db in try Thumbnail.fetchAll(db) }
+            thumbIndex = Dictionary(thumbs.map { ($0.pluginId, $0) }, uniquingKeysWith: { a, _ in a })
         } catch {
             return plugins
         }
+
+        func needsCapture(_ plugin: Plugin) -> Bool {
+            guard let thumb = thumbIndex[plugin.id] else { return true }
+            return thumb.captureVersion < DatabaseSetup.currentCaptureVersion
+        }
+
+        let candidates: [Plugin]
+        if groupPrimariesOnly {
+            let rows = plugins.map { PluginRow(plugin: $0, thumbnail: thumbIndex[$0.id], userData: nil) }
+            candidates = PluginGrouping.group(rows).map(\.primary.plugin)
+        } else {
+            candidates = plugins
+        }
+
+        return forceAll ? candidates : candidates.filter(needsCapture)
     }
 
     // MARK: - Private: capture one plugin

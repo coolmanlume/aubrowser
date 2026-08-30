@@ -7,7 +7,7 @@ import SwiftUI
 /// Full-detail sheet shown when the user clicks a card or list row.
 struct PluginDetailPopover: View {
 
-    let row: PluginRow
+    let group: PluginGroup
 
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var store: PluginStore
@@ -19,6 +19,7 @@ struct PluginDetailPopover: View {
     @State private var tagInput: String = ""
     @State private var notes: String = ""
 
+    private var row: PluginRow { group.primary }
     private var plugin: Plugin { row.plugin }
 
     var body: some View {
@@ -29,6 +30,10 @@ struct PluginDetailPopover: View {
                 VStack(alignment: .leading, spacing: 20) {
                     thumbnailSection
                     metadataGrid
+                    if group.hasMultipleVariants {
+                        Divider()
+                        variantsSection
+                    }
                     Divider()
                     tagsSection
                     notesSection
@@ -55,7 +60,7 @@ struct PluginDetailPopover: View {
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(plugin.name)
+                Text(group.displayName)
                     .font(.title3.weight(.semibold))
                 Text(plugin.manufacturer)
                     .font(.subheadline)
@@ -136,6 +141,56 @@ struct PluginDetailPopover: View {
         }
     }
 
+    // MARK: - Variants
+
+    private var variantsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Other Versions")
+                .font(.headline)
+            Text("This plugin ships \(group.variants.count) component versions — shown here as one entry.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            VStack(spacing: 0) {
+                ForEach(group.variants) { variant in
+                    variantRow(variant)
+                    if variant.id != group.variants.last?.id {
+                        Divider()
+                    }
+                }
+            }
+            .background(Color(NSColor.controlBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+    }
+
+    private func variantRow(_ variant: PluginVariant) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(variant.label ?? variant.row.plugin.name)
+                    .font(.callout.weight(variant.id == row.id ? .semibold : .regular))
+                Text(variant.row.plugin.name)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if variant.row.thumbnail == nil {
+                Text("Not captured")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            Button {
+                scanManager.rescan(variant.row.plugin)
+            } label: {
+                Image(systemName: "arrow.clockwise")
+            }
+            .buttonStyle(.plain)
+            .help("Rescan this version")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+    }
+
     // MARK: - Tags
 
     private var tagsSection: some View {
@@ -197,8 +252,10 @@ struct PluginDetailPopover: View {
 
     private var footer: some View {
         HStack {
-            Button("Rescan") { scanManager.rescan(plugin) }
-                .buttonStyle(.bordered)
+            Button(group.hasMultipleVariants ? "Rescan All Versions" : "Rescan") {
+                scanManager.rescan(group.plugins)
+            }
+            .buttonStyle(.bordered)
 
             Spacer()
 

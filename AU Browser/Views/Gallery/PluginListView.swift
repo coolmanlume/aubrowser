@@ -11,40 +11,51 @@ struct PluginListView: View {
     var onPluginSelected: (String) -> Void = { _ in }
 
     @EnvironmentObject private var store: PluginStore
-    @State private var tableSortOrder: [KeyPathComparator<PluginRow>] = [
-        .init(\.plugin.name, order: .forward)
+    @State private var tableSortOrder: [KeyPathComparator<PluginGroup>] = [
+        .init(\.displayName, order: .forward)
     ]
 
     var body: some View {
-        Table(store.rows, selection: $selectedIds, sortOrder: $tableSortOrder) {
+        Table(store.groupedRows, selection: $selectedIds, sortOrder: $tableSortOrder) {
             // Thumbnail column — view only, not sortable
-            TableColumn("") { row in
-                ThumbnailCell(thumbnail: row.thumbnail)
+            TableColumn("") { group in
+                ThumbnailCell(thumbnail: group.primary.thumbnail)
             }
             .width(52)
 
-            TableColumn("Name", value: \.plugin.name)
+            TableColumn("Name", value: \.displayName)
                 .width(min: 160, ideal: 200)
 
-            TableColumn("Manufacturer", value: \.plugin.manufacturer)
+            TableColumn("Manufacturer", value: \.manufacturer)
                 .width(min: 120, ideal: 150)
 
-            TableColumn("Type", value: \.plugin.type)
+            TableColumn("Type", value: \.primary.plugin.type)
                 .width(min: 80, ideal: 100)
 
-            TableColumn("Version", value: \.plugin.version)
+            TableColumn("Version", value: \.primary.plugin.version)
                 .width(min: 60, ideal: 80)
 
-            TableColumn("Installed", value: \.plugin.installDate) { row in
-                Text(row.plugin.installDate, style: .date)
+            TableColumn("Installed", value: \.primary.plugin.installDate) { group in
+                Text(group.primary.plugin.installDate, style: .date)
             }
             .width(min: 80, ideal: 100)
+
+            TableColumn("Versions", value: \.variants.count) { group in
+                if group.hasMultipleVariants {
+                    Text("\(group.variants.count)")
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("—")
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .width(60)
         }
         .contextMenu(forSelectionType: String.self) { ids in
             if let id = ids.first,
-               let row = store.rows.first(where: { $0.id == id }) {
+               let group = store.groupedRows.first(where: { $0.id == id }) {
                 Button("Show in Finder") {
-                    NSWorkspace.shared.selectFile(row.plugin.bundlePath,
+                    NSWorkspace.shared.selectFile(group.primary.plugin.bundlePath,
                                                   inFileViewerRootedAtPath: "")
                 }
             }
@@ -54,11 +65,11 @@ struct PluginListView: View {
             var f = store.filter
 
             switch first.keyPath {
-            case \PluginRow.plugin.name:         f.sortOrder = .name
-            case \PluginRow.plugin.manufacturer: f.sortOrder = .manufacturer
-            case \PluginRow.plugin.type:         f.sortOrder = .type
-            case \PluginRow.plugin.version:      f.sortOrder = .name   // fallback
-            case \PluginRow.plugin.installDate:  f.sortOrder = .installDate
+            case \PluginGroup.displayName:              f.sortOrder = .name
+            case \PluginGroup.manufacturer:              f.sortOrder = .manufacturer
+            case \PluginGroup.primary.plugin.type:       f.sortOrder = .type
+            case \PluginGroup.primary.plugin.version:    f.sortOrder = .name   // fallback
+            case \PluginGroup.primary.plugin.installDate: f.sortOrder = .installDate
             default: break
             }
 

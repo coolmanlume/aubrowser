@@ -27,10 +27,7 @@ struct SelectionActionBar: View {
             }
 
             Button {
-                let plugins = store.rows
-                    .filter { selectedIds.contains($0.id) }
-                    .map(\.plugin)
-                scanManager.rescan(plugins)
+                scanManager.rescan(store.plugins(inGroups: selectedIds))
             } label: {
                 Label("Rescan All", systemImage: "arrow.clockwise")
             }
